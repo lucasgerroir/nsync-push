@@ -114,7 +114,8 @@ class Nsync_Posts {
 
 					$new_post_id = Nsync_Posts::insert_post( $nsync_options );
 					Nsync_Posts::replicate_post_meta( $new_post_id  );
-					Nsync_Posts::replicate_attachments( $nsync_options, $new_post_id );
+					// added post_id as parameter because it was being referenced in function 
+					Nsync_Posts::replicate_attachments( $nsync_options, $new_post_id, $post_id);
 
 					if( !is_null( $new_post_id ) && $new_post_id != 0 ):
 						$to[ $blog_id ] = $new_post_id;
@@ -165,41 +166,39 @@ class Nsync_Posts {
 		return $attachment;
 	}
 
-	public static function path_to_file( $attachment_guid, $upload ) {
+	public static function path_to_file( $attachment_guid, $upload, $base, $upload_directory) {
 
-		$stack = explode( 'files', $attachment_guid  );
-		$filename = array_pop( $stack );
+		if ($upload_directory != "uploads") {
+			$stack = explode( $upload_directory, $attachment_guid  );
+			$filename = array_pop( $stack );
+		} else {
+			$stack = substr( strrchr( $upload["basedir"] , '/' ), 1 );	
+			$filename = explode("/" . $stack . "/", $attachment_guid)[1];
+		}
 
-		return $upload["basedir"].$filename;
+		return $base . "/" . $filename;
 	}
 
-	public static function copy_file( $attachment_guid ) {
+	public static function copy_file( $attachment_guid, $upload_directory ) {
 
-		$current_file 	= Nsync_Posts::path_to_file( $attachment_guid, self::$current_upload );
-		$new_file 		= Nsync_Posts::path_to_file( $attachment_guid, wp_upload_dir() );
-
-		if( file_exists($current_file) && is_file($current_file) ):
+		$current_file = Nsync_Posts::path_to_file( $attachment_guid, self::$current_upload,  self::$current_upload["basedir"], $upload_directory);
+		$new_file = Nsync_Posts::path_to_file( $attachment_guid, self::$current_upload,  wp_upload_dir()["basedir"], $upload_directory);
+		
+		if ( file_exists($current_file) && is_file($current_file) ):
 			// copy the file
-			if( copy( $current_file, $new_file ) )
+			if( copy( $attachment_guid, $new_file ) ) {
 				return $new_file;
-			else
+			} else {
+
 				return false;
+			}
 		endif;
 		return false;
 	}
+
 	public static function setup_taxonomies( $post_id ) {
 
 		$taxonomies = apply_filters( 'nsync_setup_taxonomies', array( 'category', 'post_tag' , 'post_format' ) );
-
-
-		/* $args= array(
-		  'public'   => true,
-		  '_builtin' => false,
-		  'show_ui'  => true,
-		  'object_type' => array('post')
-		);
-		$tax = get_taxonomies('','names');
-		var_dump($tax); */
 
 		$terms = wp_get_object_terms( $post_id, $taxonomies  );
 		$new_terms = array();
@@ -220,46 +219,27 @@ class Nsync_Posts {
 	}
 
 	public static function setup_attachments( $post_id ) {
-		$args = array(
-			'numberposts' => -1,
-			'order'=> 'DESC',
-			'post_parent' => $post_id,
-			'post_type' => 'attachment'
-		);
 
-	self::$attachments = Nsync_Posts::get_attachments( $post_id );  //returns Array ( [$image_ID]...
-	self::$current_upload = wp_upload_dir();
-	self::$featured_image = get_post_thumbnail_id( $post_id  );
+		// changed to use wordpress' built in get_attachment_media
+		self::$attachments = get_attached_media( '', $post_id );  //returns Array ( [$image_ID]...
 
-	$featured_image_not_found = true;
+		self::$current_upload = wp_upload_dir();
+		self::$featured_image = get_post_thumbnail_id( $post_id  );
 
-	foreach( self::$attachments as $attach ):
-		self::$current_attach_data[$attach->ID] = wp_get_attachment_metadata( $attach->ID );
+		$featured_image_not_found = true;
 
-		if( self::$featured_image == $attach->ID )
-			$featured_image_not_found = false;
- 	endforeach;
+		foreach( self::$attachments as $attach ):
+			self::$current_attach_data[$attach->ID] = wp_get_attachment_metadata( $attach->ID );
 
- 	if( $featured_image_not_found &&  self::$featured_image ):
- 		self::$current_attach_data[self::$featured_image] = wp_get_attachment_metadata( self::$featured_image );
- 		self::$attachments[] = get_post( self::$featured_image );
-	endif;
+			if( self::$featured_image == $attach->ID )
+				$featured_image_not_found = false;
+	 	endforeach;
 
+	 	if( $featured_image_not_found &&  self::$featured_image ):
+	 		self::$current_attach_data[self::$featured_image] = wp_get_attachment_metadata( self::$featured_image );
+	 		self::$attachments[] = get_post( self::$featured_image );
+		endif;
 
-
-	}
-
-
-
-	public static function get_attachments( $post_id ) {
-		$args = array(
-			'numberposts' => -1,
-			'order'=> 'DESC',
-			'post_parent' => $post_id,
-			'post_type' => 'attachment'
-		);
-
-		return get_children( $args );  //returns Array ( [$image_ID]...
 	}
 
 	public static function set_post_id( $blog_id ) {
@@ -274,39 +254,42 @@ class Nsync_Posts {
 	}
 
 	public static function replicate_categories( $nsync_options ) {
+		
 		$new_category_ids = array();	//to hold ids of newly create categories!
 		$existing_category_slugs = array();	//array of destination slugs and term_ids to compare against
 		$current_blogs_category = get_categories(array('hide_empty'=> 0));
 		$include_new_cats_tags = isset($nsync_options['include_new_cats_tags'])? $nsync_options['include_new_cats_tags'] : false;
 
-		//create term_id => name array
 		foreach ($current_blogs_category as $cat) {
 			$existing_category_slugs[$cat->term_id] = $cat->slug;
 		}
 
-		foreach( self::$new_categories as $new_category ):
+		foreach ( self::$new_categories as $new_category ) {
+			
 			if (!isset($include_new_cats_tags) || empty($include_new_cats_tags)) {
 				$new_category_ids[] = wp_create_category( $new_category->name );
 			} else {
+				
 				//only allow categories to match if they exist in destination's blog
 				$found_cat_id = array_search($new_category->slug, $existing_category_slugs);
+
 				if ($found_cat_id) {
-					$new_categoriy_ids[] = $found_cat_id;
+					$new_category_ids[] = $found_cat_id;
 				}
 			}
-		endforeach;
+		}
 
 		// add the post to a specific category
-		if( isset( $nsync_options['category'] )
+		if ( isset( $nsync_options['category'] ) 	
 			&& $nsync_options['category'] != '-1'
-			&& in_array( $nsync_options['category'], $new_category_ids ) ):
-			$new_categoriy_ds[] = $nsync_options['category'];
+			&& !in_array( $nsync_options['category'], $new_category_ids ) ) {
+				
+			$new_category_ids[] = $nsync_options['category'];
+		}
 
-		endif;
-
-		if( !empty( $new_category_ids ) ):
+		if ( !empty( $new_category_ids ) ) {
 			self::$remote_post->post_category = $new_category_ids;
-		endif;
+		}
 	}
 
 	/**
@@ -328,9 +311,6 @@ class Nsync_Posts {
 	}
 
 	public static function setup_post_meta( $post_id ) {
-		// post meta should be duplicated.
-		// $meta = get_post_meta( $post_id );
-
 
 		$fields = get_post_custom( $post_id );
 
@@ -353,14 +333,15 @@ class Nsync_Posts {
 
 	public static function insert_post( $nsync_options ) {
 
-		/*
-		echo "<pre>";
-		var_dump(self::$remote_post->tax_input);
-		echo "</pre>";
-		*/
 		do_action( 'nsync_before_insert' );
-		if( isset( $nsync_options['force_user'] ) &&  $nsync_options['force_user'] ) {
-			if( user_can( self::$remote_post->post_author, 'publish_post' ) ) {
+		if ( isset( $nsync_options['force_user'] ) &&  $nsync_options['force_user'] ) {
+			
+			$roles = get_userdata( self::$remote_post->post_author )->roles;
+			if ( in_array("contributor", $roles) || in_array("subscriber", $roles) ) {
+				return null;
+			} 
+			
+			if ( user_can( self::$remote_post->post_author, 'publish_posts' ) ) {
 				return wp_insert_post( self::$remote_post );
 			} else {
 				return null;
@@ -386,33 +367,42 @@ class Nsync_Posts {
 
 	}
 
-	public static function replicate_attachments( $nsync_options, $new_post_id ) {
-
-		if( isset( $nsync_options['duplicate_files'] ) &&  $nsync_options['duplicate_files'] ):
+	public static function replicate_attachments( $nsync_options, $new_post_id, $post_id) {
+		
+		if ( isset( $nsync_options['duplicate_files'] ) &&  $nsync_options['duplicate_files'] ):
+		
 			// lets clean up the attacments first though
 			if( self::$update_post ){
-				$delete_attachements = Nsync_Posts::get_attachments( $post_id );
+				// changed to use wordpress' built in get_attached_media
+				$delete_attachements = get_attached_media('', $post_id );;
+		
 				if( is_array( $delete_attachements ) ):
-					foreach( $delete_attachements as $delete )
+					foreach( $delete_attachements as $delete ) {
 						wp_delete_attachment( $delete->ID, true );
+					}
+					
 				endif;
 			}
 
+			if ( isset( $nsync_options['upload_dir']) ) {
+				$upload_directory = $nsync_options['upload_dir'];
+			}
+		
 			foreach( self::$attachments as $attachment):
 
 				$current_attachment_id = $attachment->ID;
+	
 				// copy over the file
-				$filename = Nsync_Posts::copy_file( $attachment->guid );
+				$filename = Nsync_Posts::copy_file( $attachment->guid, $upload_directory);
 				$attachment = Nsync_Posts::clean_attachment( $attachment );
 				$attach_id = wp_insert_attachment( $attachment, $filename, $new_post_id );
 	 			$attach_data = wp_generate_attachment_metadata( $attach_id, $filename );
-
+	 	
 	  			wp_update_attachment_metadata( $attach_id,  $attach_data );
 	  			Nsync_Posts::update_content( $attach_data, self::$current_attach_data[$current_attachment_id], $new_post_id );
 
-
 				// lets set the post_thumbnail
-				if( self::$featured_image == $current_attachment_id )
+				if ( self::$featured_image == $current_attachment_id )
 					set_post_thumbnail( $new_post_id, $attach_id );
 
 			endforeach;
@@ -423,36 +413,40 @@ class Nsync_Posts {
 
 	public static function update_content( $attach_data, $current_attach_data, $new_post_id ) {
 
-		// return;
+		$stack = substr( strrchr( $attach_data['file'], '/' ), 1 );	
+		$filename = str_replace($stack, '', $attach_data['file']);
 		$current_url = self::$current_upload['baseurl'];
+		
+		$remote_url = wp_upload_dir()["baseurl"];
 
-		$remote_url = get_site_url().'/files';
 
 		// set to empty array so that we don't worry about anything
 		self::$replacement = array();
 		self::$replacement['current'] = array();
 		self::$replacement['remote'] = array();
 
-		self::$replacement['current'][]   = $current_url.'/'.$attach_data['file'];
-		self::$replacement['remote'][] = $remote_url.'/'.$attach_data['file'];
+		self::$replacement['current'][]   = $current_url . '/' . $attach_data['file'];
+		self::$replacement['remote'][] = $remote_url . '/' . $attach_data['file'];
 
+		$cur_with_date = $current_url . '/' . $filename;
+		$rem_with_date = $remote_url . '/' . $filename;
+		
 		if( is_array($current_attach_data['sizes']) ):
 			foreach( $current_attach_data['sizes'] as $size => $data ):
 
 				if( $attach_data['sizes'][$size]['file'] ):
-					self::$replacement['current'][]   = $current_url.'/'.$data['file'];
-					self::$replacement['remote'][] = $remote_url.'/'.$attach_data['sizes'][$size]['file'];
+					self::$replacement['current'][]   = $cur_with_date . $data['file'];
+					self::$replacement['remote'][] = $rem_with_date . $attach_data['sizes'][$size]['file'];
 				endif;
 			endforeach;
 		endif;
-		// if( self::$replacement['current'] ) not sure if this was supposed to be deleted.
 
-		// wp_delete_post( $postid, true );
 		// replace all the string
 		$update['ID'] = $new_post_id;
-  		$update['post_content'] = str_replace ( self::$replacement['current'] , self::$replacement['remote'] , self::$remote_post->post_content  );
-  		if( $update['post_content'] != self::$remote_post->post_content ):
+  
+  		$update['post_content'] = str_replace ( $cur_with_date , $rem_with_date , self::$remote_post->post_content  );
 
+  		if( $update['post_content'] != self::$remote_post->post_content ):
   			// lets erase the last revision because we are about to creat a new one. :$
   			$revisions = wp_get_post_revisions( $new_post_id );
   			$last_one = array_slice($revisions, 0, 3);
@@ -608,6 +602,7 @@ class Nsync_Posts {
 	 * @return Ambigous <string, unknown>
 	 */
 	public static function nsync_post_edit_single_post($content) {
+		
 		unset( $nsync_options );
 		$nsync_options = get_option( 'nsync_options' );
 
