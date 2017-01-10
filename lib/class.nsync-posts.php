@@ -166,23 +166,17 @@ class Nsync_Posts {
 		return $attachment;
 	}
 
-	public static function path_to_file( $attachment_guid, $upload, $base, $upload_directory) {
-
-		if ($upload_directory != "uploads") {
-			$stack = explode( $upload_directory, $attachment_guid  );
-			$filename = array_pop( $stack );
-		} else {
-			$stack = substr( strrchr( $upload["basedir"] , '/' ), 1 );	
-			$filename = explode("/" . $stack . "/", $attachment_guid)[1];
-		}
-
-		return $base . "/" . $filename;
+	public static function path_to_file( $attachment_guid, $upload, $base) {
+		
+		$file = explode( $upload["baseurl"], $attachment_guid  )[1];
+		
+		return $base . $file;
 	}
 
-	public static function copy_file( $attachment_guid, $upload_directory ) {
+	public static function copy_file( $attachment_guid ) {
 
-		$current_file = Nsync_Posts::path_to_file( $attachment_guid, self::$current_upload,  self::$current_upload["basedir"], $upload_directory);
-		$new_file = Nsync_Posts::path_to_file( $attachment_guid, self::$current_upload,  wp_upload_dir()["basedir"], $upload_directory);
+		$current_file = Nsync_Posts::path_to_file( $attachment_guid, self::$current_upload,  self::$current_upload["basedir"]);
+		$new_file = Nsync_Posts::path_to_file( $attachment_guid, self::$current_upload,  wp_upload_dir()["basedir"]);
 		
 		if ( file_exists($current_file) && is_file($current_file) ):
 			// copy the file
@@ -384,16 +378,12 @@ class Nsync_Posts {
 				endif;
 			}
 
-			if ( isset( $nsync_options['upload_dir']) ) {
-				$upload_directory = $nsync_options['upload_dir'];
-			}
-		
 			foreach( self::$attachments as $attachment):
 
 				$current_attachment_id = $attachment->ID;
 	
 				// copy over the file
-				$filename = Nsync_Posts::copy_file( $attachment->guid, $upload_directory);
+				$filename = Nsync_Posts::copy_file( $attachment->guid);
 				$attachment = Nsync_Posts::clean_attachment( $attachment );
 				$attach_id = wp_insert_attachment( $attachment, $filename, $new_post_id );
 	 			$attach_data = wp_generate_attachment_metadata( $attach_id, $filename );
@@ -413,12 +403,15 @@ class Nsync_Posts {
 
 	public static function update_content( $attach_data, $current_attach_data, $new_post_id ) {
 
-		$stack = substr( strrchr( $attach_data['file'], '/' ), 1 );	
-		$filename = str_replace($stack, '', $attach_data['file']);
-		$current_url = self::$current_upload['baseurl'];
 		
-		$remote_url = wp_upload_dir()["baseurl"];
-
+		$stack = substr( strrchr( $attach_data['file'], '/' ), 1 );
+		$filename = str_replace($stack, '', $attach_data['file']);
+		
+	    $current_url = self::$current_upload['baseurl'];
+	    
+		$blog_details = get_blog_details(self::$current_blog_id);
+		$remote_url = str_replace($blog_details->blogname . "/", "", wp_upload_dir()["baseurl"]);
+		
 
 		// set to empty array so that we don't worry about anything
 		self::$replacement = array();
@@ -430,7 +423,7 @@ class Nsync_Posts {
 
 		$cur_with_date = $current_url . '/' . $filename;
 		$rem_with_date = $remote_url . '/' . $filename;
-		
+
 		if( is_array($current_attach_data['sizes']) ):
 			foreach( $current_attach_data['sizes'] as $size => $data ):
 
