@@ -282,8 +282,10 @@ class Nsync_Posts {
 		foreach( self::$attachments as $attach ):
 			self::$current_attach_data[$attach->ID] = wp_get_attachment_metadata( $attach->ID );
 
-			if( self::$featured_image == $attach->ID )
+			if ( self::$featured_image == $attach->ID ) {
 				$featured_image_not_found = false;
+			}
+				
 	 	endforeach;
 
 	 	if( $featured_image_not_found &&  self::$featured_image ):
